@@ -38,17 +38,13 @@ const CHECK_PRELUDE: bool = false;
 const CHECK_LOCAL_IMPORT: bool = true;
 const PRINT_GRAPH: bool = true;
 
-fn check_prelude(modules : &Graph) {
+fn check_prelude(graph : &Graph) {
     println!("which non-prelue imports a prelude");
-    for (_n, m) in modules.iter() {
-      if m.prelude { continue };
-
-      for name in m.dependencies.iter() {
-        if let Some(dep) = modules.get(name) {
-          if dep.prelude {
-            println!("module {} imports {}", m.name.join("."), dep.name.join("."));
-          }
-        }
+    for (m_id, d_id) in graph.iter_edges() {
+      let m = graph.get_module(m_id);
+      let d = graph.get_module(d_id);
+      if !m.prelude() && d.prelude() {
+            println!("module {} imports {}", m.name, d.name);
       }
     }
 }

@@ -1,4 +1,5 @@
 use std::collections::{HashMap};
+use std::iter::Iterator;
 
 #[derive (PartialEq, Eq, Clone, Copy, Debug, Hash)]
 pub struct Id { id: usize }
@@ -8,6 +9,10 @@ pub struct Module {
   id: Id,
   prelude: bool,
   dependencies: Vec<Id>
+}
+
+impl Module {
+  pub fn prelude(&self) : bool { self.prelude }
 }
 
 pub struct Graph {
@@ -43,8 +48,16 @@ impl Graph {
     self.names.get(id.id).unwrap().clone()
   }
 
+  pub fn get_module<'a> (&'a self, id: Id) -> &'a Module {
+    self.modules.get(&id).unwrap()
+  }
+
   pub fn find_module(&self, name: &str) -> Option<Id> {
     self.id.get(&name.to_string()).map (|x| *x)
+  }
+
+  pub fn iter_edges<'a>(&'a self) -> impl Iterator<Item = (Id, Id)> + 'a {
+    self.modules.values().flat_map(|m| m.dependencies.iter().map(|d| (m.id, *d)))
   }
 
 }
