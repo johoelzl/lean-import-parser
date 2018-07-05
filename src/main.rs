@@ -17,103 +17,101 @@ fn scan_path(graph : &mut module_graph::Graph, name : &Vec<String>, p : &Path) {
     let e = entry.unwrap();
     let m = e.metadata().unwrap();
     let p = e.path();
+
     let mut n = name.clone();
     let stem = e.path().file_stem().unwrap().to_string_lossy().to_string();
     if stem != "default" { n.push(stem) };
+
     if m.is_dir() {
       scan_path(graph, &n, &e.path());
     } else if p.extension() == Some(ffi::OsStr::new("lean")) {
       let (prelude, dependencies) = parser::parse(&p.to_string_lossy());
       let id = graph.register_name(&n.join("."));
-      graph.register_module(Module {
-        id, prelude,
-        dependencies: dependencies.iter().map(|v| graph.register_name(&v.join("."))).collect()
-      });
+      let deps = dependencies.iter().map(|v| graph.register_name(&v.join("."))).collect();
+      graph.register_module(id, prelude, deps);
     }
   }
 }
 
-const CHECK_FIND_ALL: bool = false;
 const CHECK_PRELUDE: bool = false;
 const CHECK_LOCAL_IMPORT: bool = true;
 const PRINT_GRAPH: bool = true;
 
+fn check_find_all(graph : &Graph) {
+  println!("check if all modules are found");
+  for (m, d) in graph.iter_edges() {
+    if graph.get_module(d).is_none() {
+      println!("module {} (in {}) not found", graph.get_name(d), graph.get_name(m.id()));
+    }
+  }
+}
+
 fn check_prelude(graph : &Graph) {
     println!("which non-prelue imports a prelude");
-    for (m_id, d_id) in graph.iter_edges() {
-      let m = graph.get_module(m_id);
-      let d = graph.get_module(d_id);
+    for (m, id) in graph.iter_edges() {
+      let d = graph.get_module(id).unwrap();
       if !m.prelude() && d.prelude() {
-            println!("module {} imports {}", m.name, d.name);
+            println!("module {} imports {}", graph.get_name(m.id()), graph.get_name(d.id()));
       }
     }
 }
 
-fn check_find_all(modules : &Graph) {
-  println!("check if all modules are found");
-  for (_n, m) in modules.iter() {
-    for name in m.dependencies.iter() {
-      if ! modules.contains_key(name) {
-        println!("module {} (in {}) not found", name.join("."), m.name.join("."));
-      }
-    }
-  }
-}
-
-fn check_local_import(modules : &Graph) {
+fn check_local_import(graph : &Graph) {
   println!("check if a module uses local \".\" import syntax");
-  for (n, m) in modules.iter() {
-    for name in m.dependencies.iter() {
-      if name.first().unwrap() == "" {
-        println!("local module syntax used in {} for {}", n.join("."), name.join("."));
-        panic!("TODO: local module syntax not supported");
-      }
+  for (m, id) in graph.iter_edges() {
+    if graph.get_name(id).starts_with(".") {
+      println!("local module syntax used in {} for {}", graph.get_name(m.id()), graph.get_name(id));
+      panic!("TODO: local module syntax not supported");
     }
   }
 }
 
-fn compute_full_dependencies(
-  name: &Name,
-  modules: &Graph,
-  history: &Vec<Name>,
-  full_dependencies: &mut HashMap<Name, Vec<Name>>) {
-  if full_dependencies.contains_key(name) { return; }
-  { let cycle : Vec<Name> = history.iter().skip_while(|&n| n != name).cloned().collect();
-    if cycle.len() > 0 {
-      panic!("cycle detected");
-    }
+fn compute_transitive_map(
+  graph: &Graph,
+  m: &Module,
+  history: &Vec<Id>,
+  transitive_map: &mut HashMap<Id, Vec<Id>>)
+{
+  if transitive_map.contains_key(&m.id()) { return; }
+
+  if history.iter().any(|i| *i == m.id()) {
+    panic!("cycle detected");
   }
 
-  let mut full : Vec<Name> = Vec::new();
-  let m = modules.get(name).unwrap();
   let mut new_history = history.clone();
-  new_history.push(name.clone());
-  for dep in m.dependencies.iter() {
-    compute_full_dependencies(dep, modules, &new_history, full_dependencies);
-    full.append(&mut full_dependencies.get(dep).unwrap().clone());
+  new_history.push(m.id());
+
+  let mut transitive : Vec<Id> = Vec::new();
+  for d in m.dependencies().iter() {
+    compute_transitive_map(graph, graph.get_module(*d).unwrap(), &new_history, transitive_map);
+    transitive.extend(transitive_map.get(d).unwrap());
   }
-  full_dependencies.insert(name.clone(), full);
+
+  transitive_map.insert(m.id(), transitive);
 }
 
-fn print_graph(modules : &Graph) {
+fn print_graph(graph : &Graph) {
   println!("print graph");
 
-  let mut full_dependencies: HashMap<Name, Vec<Name>> = HashMap::new();
-  let mut direct_dependencies: HashMap<Name, Vec<Name>> = HashMap::new();
+  let mut transitive_map: HashMap<Id, Vec<Id>> = HashMap::new();
+  let mut direct_dependencies: HashMap<Id, Vec<Id>> = HashMap::new();
 
-  for (name, _module) in modules.iter() {
-    compute_full_dependencies(&name, modules, &Vec::new(), &mut full_dependencies);
+  for module in graph.modules() {
+    compute_transitive_map(graph, module, &Vec::new(), &mut transitive_map);
   }
 
-  for (name, module) in modules.iter() {
-    let old : HashSet<Name> = module.dependencies.iter().cloned().collect();
-    let all_children : HashSet<Name> =
-      module.dependencies.iter().flat_map(|d| full_dependencies.get(d).unwrap().iter()).cloned().collect();
-    let new : Vec<Name> = old.difference(&all_children).map(|n| n.to_vec()).collect();
-    direct_dependencies.insert(name.clone(), new);
+  for module in graph.modules() {
+    let old : HashSet<Id> = module.dependencies().iter().cloned().collect();
+    let all_children : HashSet<Id> =
+      module
+        .dependencies()
+        .into_iter()
+        .flat_map(|d| transitive_map.get(&d).unwrap().into_iter())
+        .cloned()
+        .collect();
+    let new : Vec<Id> = old.difference(&all_children).cloned().collect();
+    direct_dependencies.insert(module.id(), new);
   }
-
-
 
 }
 
@@ -123,7 +121,7 @@ fn main() {
   let mut graph = Graph::new();
   for dir in args { scan_path(&mut graph, &Vec::new(), Path::new(&dir)); }
 
-  if CHECK_FIND_ALL { check_find_all(&graph); }
+  check_find_all(&graph);
   if CHECK_PRELUDE { check_prelude(&graph); }
   if CHECK_LOCAL_IMPORT { check_local_import(&graph); }
   if PRINT_GRAPH { print_graph(&graph); }

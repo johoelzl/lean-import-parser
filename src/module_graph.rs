@@ -12,7 +12,9 @@ pub struct Module {
 }
 
 impl Module {
-  pub fn prelude(&self) : bool { self.prelude }
+  pub fn prelude(&self) -> bool { self.prelude }
+  pub fn id(&self) -> Id { self.id }
+  pub fn dependencies(&self) -> &Vec<Id> { &self.dependencies }
 }
 
 pub struct Graph {
@@ -27,37 +29,34 @@ impl Graph {
   }
 
   pub fn register_name(&mut self, name: &str) -> Id {
-    match self.id.get(name) {
-      None => {
-        let id = Id { id: self.names.len() };
-        self.names.push(name.to_string());
-        self.id.insert(name.to_string(), id);
-        id
-      },
-      Some(id) => *id
+    self.id.get(name).cloned().unwrap_or_else(|| {
+      let id = Id { id: self.names.len() };
+      self.names.push(name.to_string());
+      self.id.insert(name.to_string(), id);
+      id
+    })
+  }
+
+  pub fn register_module(&mut self, id: Id, prelude: bool, dependencies: Vec<Id>) {
+    if self.modules.insert(id, Module { id, prelude, dependencies }).is_some() {
+      panic!("Module for id {} ({}) registered twice.", id.id, self.get_name(id));
     }
   }
 
-  pub fn register_module(&mut self, module: Module) {
-    if self.modules.insert(module.id, module).is_none() {
-      panic!("Module for id {} registered twice.", module.id.id);
-    }
+  pub fn get_name(&self, id: Id) -> &String {
+    self.names.get(id.id).unwrap()
   }
 
-  pub fn get_name(&self, id: Id) -> String {
-    self.names.get(id.id).unwrap().clone()
+  pub fn get_module (&self, id: Id) -> Option<&Module> {
+    self.modules.get(&id)
   }
 
-  pub fn get_module<'a> (&'a self, id: Id) -> &'a Module {
-    self.modules.get(&id).unwrap()
+  pub fn modules (&self) -> impl Iterator<Item = &Module> {
+    self.modules.values()
   }
 
-  pub fn find_module(&self, name: &str) -> Option<Id> {
-    self.id.get(&name.to_string()).map (|x| *x)
-  }
-
-  pub fn iter_edges<'a>(&'a self) -> impl Iterator<Item = (Id, Id)> + 'a {
-    self.modules.values().flat_map(|m| m.dependencies.iter().map(|d| (m.id, *d)))
+  pub fn iter_edges<'a> (&'a self) -> impl Iterator<Item = (&'a Module, Id)> + 'a {
+    self.modules.values().flat_map(|m| m.dependencies.iter().map(move |&d| (m, d)))
   }
 
 }
