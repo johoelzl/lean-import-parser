@@ -8,6 +8,7 @@ use std::path::Path;
 use std::env;
 use std::fs;
 use std::ffi;
+use std::io::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use module_graph::{Id, Module, Graph};
@@ -70,7 +71,7 @@ fn compute_transitive_map(
   graph: &Graph,
   m: &Module,
   history: &Vec<Id>,
-  transitive_map: &mut HashMap<Id, Vec<Id>>)
+  transitive_map: &mut HashMap<Id, HashSet<Id>>)
 {
   if transitive_map.contains_key(&m.id()) { return; }
 
@@ -81,7 +82,7 @@ fn compute_transitive_map(
   let mut new_history = history.clone();
   new_history.push(m.id());
 
-  let mut transitive : Vec<Id> = Vec::new();
+  let mut transitive : HashSet<Id> = m.dependencies().into_iter().cloned().collect();
   for d in m.dependencies().iter() {
     compute_transitive_map(graph, graph.get_module(*d).unwrap(), &new_history, transitive_map);
     transitive.extend(transitive_map.get(d).unwrap());
@@ -90,10 +91,11 @@ fn compute_transitive_map(
   transitive_map.insert(m.id(), transitive);
 }
 
+#[allow(unused_must_use)]
 fn print_graph(graph : &Graph) {
   println!("print graph");
 
-  let mut transitive_map: HashMap<Id, Vec<Id>> = HashMap::new();
+  let mut transitive_map: HashMap<Id, HashSet<Id>> = HashMap::new();
   let mut direct_dependencies: HashMap<Id, Vec<Id>> = HashMap::new();
 
   for module in graph.modules() {
@@ -111,7 +113,52 @@ fn print_graph(graph : &Graph) {
         .collect();
     let new : Vec<Id> = old.difference(&all_children).cloned().collect();
     direct_dependencies.insert(module.id(), new);
+
   }
+
+  let mut f = fs::File::create("graph.dot").unwrap();
+
+  let mut color_map: HashMap<&'static str, &'static str> = HashMap::new();
+  color_map.insert("logic", "pink");
+  color_map.insert("order", "red");
+  color_map.insert("algebra", "green");
+  // color_map.insert("data", "yellow");
+  color_map.insert("tactic", "blue");
+
+  let filter = |i : Id| {
+    let m: &Module = graph.get_module(i).unwrap();
+    let n: &String = graph.get_name(i);
+    let prefix = n.split(".").next().unwrap();
+    !m.prelude() && color_map.contains_key(prefix)
+  };
+
+  writeln!(f, "digraph deps {{");
+  for (&prefix, &color) in color_map.iter() {
+    writeln!(f, "{{ node [ style = filled,\n\t\tfillcolor = {} ]; ", color);
+    let mut first = true;
+    for m in graph.modules() {
+      let n = graph.get_name(m.id());
+      if n.split(".").next().unwrap() != prefix { continue; }
+      if first {
+        first = false
+      } else {
+        write!(f, "; ");
+      }
+      write!(f, "\"{}\"", n);
+    }
+    writeln!(f, " }}");
+  }
+  for (&module_id, dependencies) in transitive_map.iter() {
+    if ! filter(module_id) { continue; }
+    for &dep in dependencies {
+      if ! filter(dep) { continue; }
+
+      writeln!(f, "\t\"{}\" -> \"{}\";", graph.get_name(module_id), graph.get_name(dep));
+    }
+  }
+  writeln!(f, "}}");
+
+
 
 }
 
